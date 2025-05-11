@@ -6,3 +6,5 @@ FROM scratch
 COPY --from=go-builder --chmod=755 /main /simple-web
 CMD ["./simple-web"]
 #Blabla Remote
+#Adding line test
+
