@@ -3,7 +3,8 @@ name: Build and Push Docker Image to AWS ECR
 on:
   push:
     branches:
-      - test2
+      - test
+
 env:
   AWS_REGION: 'us-east-1'
   AWS_ECR_REPO: demo-go-testweb
