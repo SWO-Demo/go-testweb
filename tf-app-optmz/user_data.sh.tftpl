@@ -1,0 +1,125 @@
+#!/bin/bash
+set -xe
+exec > >(tee /var/log/user-data.log | logger -t user-data -s 2>/dev/console) 2>&1
+
+#add swap
+fallocate -l 1G /swapfile
+chmod 600 /swapfile
+mkswap /swapfile
+swapon /swapfile
+grep -q '/swapfile' /etc/fstab || echo '/swapfile swap swap defaults 0 0' >> /etc/fstab
+sleep 1
+
+## get instance ID
+# TOKEN=$(curl -s -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" -X PUT "http://169.254.169.254/latest/api/token")
+# INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id)
+INSTANCE_ID=$(cat /var/lib/cloud/data/instance-id)
+
+##=====Function Definitions=====
+attach_vol() {
+  while [ "$(aws ec2 describe-volumes --volume-ids ${volume_id} --region ${region} --query 'Volumes[0].State' --output text)" != "available" ]; do
+    sleep 3 # loop-wait to become available
+  done
+  aws ec2 attach-volume --volume-id ${volume_id} --device ${device} --instance-id $INSTANCE_ID --region ${region}
+  sleep 5 ## prevent race condition
+}
+
+format_vol() {
+  echo "Formatting ${device} as ext4..."
+  mkfs -t ext4 ${device}
+}
+
+mount_vol() {
+  echo "Mounting ${device} to /var/lib/jenkins..."
+  mkdir -p /var/lib/jenkins
+  grep -q "/var/lib/jenkins" /etc/fstab || echo "${device} /var/lib/jenkins ext4 defaults,nofail 0 2" >> /etc/fstab
+  mount -a
+  sleep 1
+}
+
+install_softwares() {
+  curl -sLo /etc/yum.repos.d/jenkins.repo https://pkg.jenkins.io/redhat-stable/jenkins.repo
+  rpm --import https://pkg.jenkins.io/redhat-stable/jenkins.io-2023.key
+  dnf update -y
+  dnf install -y java-25-amazon-corretto git vim bind-utils docker amazon-ssm-agent jenkins
+  usermod -aG docker jenkins
+}
+
+setup_jenkins() {
+  # Pass the certificates from TF Code and Convert to P12
+  rm -rf /var/lib/jenkins/ssl
+  mkdir -p /var/lib/jenkins/ssl && cd $_
+  echo '${cert_json}' > certificate-export.json
+  cat certificate-export.json | jq -r '.Certificate' > certificate.pem
+  cat certificate-export.json | jq -r '.PrivateKey' > private-key.pem
+  openssl pkcs12 -export \
+      -out jenkins.p12 \
+      -inkey private-key.pem \
+      -in certificate.pem \
+      -passout pass:Password
+  rm -f certificate-export.json certificate.pem private-key.pem
+  chown jenkins:jenkins -R /var/lib/jenkins
+  chmod 600 jenkins.p12
+
+  # Setup Jenkins to use the certificates
+  mkdir -p /etc/systemd/system/jenkins.service.d
+  tee /etc/systemd/system/jenkins.service.d/override.conf > /dev/null <<'EOF'
+[Service]
+Environment="JENKINS_OPTS=--httpPort=-1 --httpsPort=8443 --httpsKeyStore=/var/lib/jenkins/ssl/jenkins.p12 --httpsKeyStorePassword=Password"
+Environment="JENKINS_LISTEN_ADDRESS=0.0.0.0"
+EOF
+  echo 'JAVA_ARGS="-Xms128m -Xmx256m"' >> /etc/sysconfig/jenkins
+
+  systemctl daemon-reexec
+  sleep 1
+  systemctl enable --now jenkins amazon-ssm-agent docker
+
+  echo "===== Jenkins Initial Admin Password ====="
+  if [ -f /var/lib/jenkins/secrets/initialAdminPassword ]; then
+    cat /var/lib/jenkins/secrets/initialAdminPassword
+  else
+    echo "initialAdminPassword not found"
+  fi
+  echo "===== END of Jenkins Setup ====="
+}
+
+setup_dyndns() {
+  # Update DynDNS with the current public IP
+  TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 60")
+  PUBLIC_IP=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/public-ipv4)
+
+  DOMAIN="jenkins.dedyn.io"
+  API_TOKEN="WPj92sfuna22B5XjYJ9NifCGwRQd"
+
+  curl -X PUT "https://desec.io/api/v1/domains/$DOMAIN/rrsets/" \
+      -H "Authorization: Token $API_TOKEN" \
+      -H "Content-Type: application/json" \
+      --data "[{\"subname\": \"\", \"type\": \"A\", \"ttl\": 60, \"records\": [\"$PUBLIC_IP\"]}]"
+}
+
+###=====End Of Function Definitions=====
+
+###=====Main Script Execution=====
+attach_vol
+while [ ! -b ${device} ]; do echo "Waiting for device..."; sleep 1; done
+if ! blkid ${device} &>/dev/null; then
+  format_vol
+  mount_vol
+  install_softwares
+  setup_jenkins
+else
+  mount_vol
+  sleep 1
+  if [ ! -f /var/lib/jenkins/config.xml ]; then
+    install_softwares
+    setup_jenkins
+  else
+    umount ${device}
+    install_softwares
+    sleep 1
+    mount_vol
+    sleep 1
+    setup_jenkins
+  fi
+fi
+###=====End Of Main Script Execution=====
