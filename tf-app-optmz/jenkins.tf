@@ -27,7 +27,7 @@ data "aws_ami" "al2023" {
   owners      = ["amazon"]
   filter {
     name   = "name"
-    values = ["al2023-ami-*-x86_64"]
+    values = ["al2023-ami-*-arm64"] #["al2023-ami-*-x86_64"]
   }
 }
 
@@ -39,7 +39,7 @@ resource "aws_key_pair" "laptopswo_key" {
 resource "aws_ebs_volume" "jenkins_data" {
   availability_zone = local.az
   type              = "gp3"
-  size              = 30
+  size              = 4
   encrypted         = false
   throughput        = 125
   iops              = 3000
@@ -49,6 +49,7 @@ resource "aws_ebs_volume" "jenkins_data" {
   }
 }
 
+##Commenting to use dyndns for public IP management instead of EIP
 # resource "aws_eip" "jenkins_eip" {
 #   domain = "vpc"
 #   tags = {
@@ -73,13 +74,21 @@ resource "aws_ebs_volume" "jenkins_data" {
 resource "aws_launch_template" "jenkins" {
   name_prefix   = "jenkins-spot-lt-"
   image_id      = data.aws_ami.al2023.id
-  instance_type = "t3.medium"
+  instance_type = "t4g.medium"
   key_name      = aws_key_pair.laptopswo_key.key_name
 
-  # network_interfaces {
-  #   network_interface_id = aws_network_interface.jenkins_eni.id
-  #   device_index         = 0
-  # }
+  # protect from surge cost
+  credit_specification {
+    cpu_credits = "standard"
+  }
+
+  network_interfaces {
+    associate_public_ip_address = true
+    security_groups             = [aws_security_group.jenkins_sg.id]
+    delete_on_termination       = true
+    # network_interface_id = aws_network_interface.jenkins_eni.id
+    # device_index         = 0
+  }
 
   user_data = base64encode(templatefile("${path.module}/user_data.sh.tftpl", {
     volume_id = aws_ebs_volume.jenkins_data.id
@@ -88,17 +97,24 @@ resource "aws_launch_template" "jenkins" {
     device    = "/dev/xvdf"
   }))
 
-  block_device_mappings {
-    device_name = "/dev/xvda"
-    ebs {
-      volume_size = 30
-      volume_type = "gp3"
-      delete_on_termination = true
-      encrypted             = false
-      iops        = 3000
-      throughput = 125
-    }
-  }
+  #########
+  ## root volume xvda is automatically created.
+  ## it will be created by the size of the image and default to deletion on termination true
+  ## the jenkins data volume must be attach and mount through user script because we use spot instance that change frequently, 
+  ## so we can't use block device mapping to attach the data volume, 
+  ## otherwise we will lose data when instance is terminated and recreated with new volume.
+  #########
+  # block_device_mappings {
+  # #   device_name = "/dev/xvda"
+  # #   ebs {
+  # #     volume_size = 30
+  # #     volume_type = "gp3"
+  # #     delete_on_termination = true
+  # #     encrypted             = false
+  # #     iops        = 3000
+  # #     throughput = 125
+  # #   }
+  # }
 
   instance_market_options {
     market_type = "spot"
@@ -134,7 +150,9 @@ resource "aws_autoscaling_group" "jenkins" {
   min_size            = 1
   desired_capacity    = 1
   max_size            = 1
-  availability_zones  = [local.az]
+  ##Commenting to use dyndns for public IP management instead of EIP
+  # availability_zones  = [local.az]
+  vpc_zone_identifier = [data.aws_subnet.selected.id]
 
   launch_template {
     id      = aws_launch_template.jenkins.id

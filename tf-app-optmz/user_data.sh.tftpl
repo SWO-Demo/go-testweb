@@ -91,16 +91,21 @@ setup_dyndns() {
   DOMAIN="jenkins.dedyn.io"
   API_TOKEN="WPj92sfuna22B5XjYJ9NifCGwRQd"
 
-  curl -X PUT "https://desec.io/api/v1/domains/$DOMAIN/rrsets/" \
-      -H "Authorization: Token $API_TOKEN" \
-      -H "Content-Type: application/json" \
-      --data "[{\"subname\": \"\", \"type\": \"A\", \"ttl\": 60, \"records\": [\"$PUBLIC_IP\"]}]"
+  # curl -X PUT "https://desec.io/api/v1/domains/$DOMAIN/rrsets/" \
+  #     -H "Authorization: Token $API_TOKEN" \
+  #     -H "Content-Type: application/json" \
+  #     --data "[{\"subname\": \"\", \"type\": \"A\", \"ttl\": 3600, \"records\": [\"$PUBLIC_IP\"]}]"
+  curl -s "https://update.dedyn.io/?username=$DOMAIN&password=$API_TOKEN&myip=$PUBLIC_IP"
 }
 
 ###=====End Of Function Definitions=====
 
+
+
 ###=====Main Script Execution=====
+
 attach_vol
+
 while [ ! -b ${device} ]; do echo "Waiting for device..."; sleep 1; done
 if ! blkid ${device} &>/dev/null; then
   format_vol
@@ -122,4 +127,7 @@ else
     setup_jenkins
   fi
 fi
+
+setup_dyndns
+
 ###=====End Of Main Script Execution=====
