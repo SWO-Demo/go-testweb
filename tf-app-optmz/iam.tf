@@ -100,3 +100,22 @@ resource "aws_iam_instance_profile" "jenkins_profile" {
   name = "jenkins_instance_profile"
   role = aws_iam_role.jenkins_role.name
 }
+
+resource "aws_iam_role_policy" "codebuild_trigger_policy" {
+  name = "jenkins_codebuild_trigger_policy"
+  role = aws_iam_role.jenkins_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "codebuild:StartBuild",
+        "codebuild:BatchGetBuilds",
+        "codebuild:StopBuild",
+        "codebuild:BatchDeleteBuilds"
+      ]
+      Resource = aws_codebuild_project.jenkins_agent.arn
+    }]
+  })
+}

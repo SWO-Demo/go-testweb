@@ -37,6 +37,14 @@ mount_vol() {
   sleep 1
 }
 
+install_softwares() {
+  curl -sLo /etc/yum.repos.d/jenkins.repo https://pkg.jenkins.io/redhat-stable/jenkins.repo
+  rpm --import https://pkg.jenkins.io/redhat-stable/jenkins.io-2023.key
+  dnf update -y
+  dnf install -y java-25-amazon-corretto git vim bind-utils docker amazon-ssm-agent jenkins
+  usermod -aG docker jenkins
+}
+
 setup_jenkins() {
   # Pass the certificates from TF Code and Convert to P12
   rm -rf /var/lib/jenkins/ssl
@@ -66,14 +74,13 @@ EOF
   sleep 1
   systemctl enable --now jenkins amazon-ssm-agent docker
 
-
+  echo "===== Jenkins Initial Admin Password ====="
   if [ -f /var/lib/jenkins/secrets/initialAdminPassword ]; then
-    echo "===== Jenkins Initial Admin Password ====="
     cat /var/lib/jenkins/secrets/initialAdminPassword
-    echo "===== END of Jenkins Setup ====="
   else
     echo "initialAdminPassword not found"
   fi
+  echo "===== END of Jenkins Setup ====="
 }
 
 setup_dyndns() {
@@ -103,14 +110,17 @@ while [ ! -b ${device} ]; do echo "Waiting for device..."; sleep 1; done
 if ! blkid ${device} &>/dev/null; then
   format_vol
   mount_vol
+  install_softwares
   setup_jenkins
 else
   mount_vol
   sleep 1
   if [ ! -f /var/lib/jenkins/config.xml ]; then
+    install_softwares
     setup_jenkins
   else
     umount ${device}
+    install_softwares
     sleep 1
     mount_vol
     sleep 1

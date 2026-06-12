@@ -22,12 +22,12 @@ resource "aws_security_group" "jenkins_sg" {
 }
 
 
-data "aws_ami" "al2023" {
+data "aws_ami" "jenkins_custom" {
   most_recent = true
-  owners      = ["amazon"]
+  owners      = ["self"]
   filter {
     name   = "name"
-    values = ["al2023-ami-*-arm64"] #["al2023-ami-*-x86_64"]
+    values = ["jenkins-ami-*"]
   }
 }
 
@@ -73,8 +73,8 @@ resource "aws_ebs_volume" "jenkins_data" {
 
 resource "aws_launch_template" "jenkins" {
   name_prefix   = "jenkins-spot-lt-"
-  image_id      = data.aws_ami.al2023.id
-  instance_type = "t4g.medium"
+  image_id      = data.aws_ami.jenkins_custom.id
+  instance_type = "t4g.small" #"t4g.medium"
   key_name      = aws_key_pair.laptopswo_key.key_name
 
   # protect from surge cost
@@ -104,17 +104,17 @@ resource "aws_launch_template" "jenkins" {
   ## so we can't use block device mapping to attach the data volume, 
   ## otherwise we will lose data when instance is terminated and recreated with new volume.
   #########
-  # block_device_mappings {
-  # #   device_name = "/dev/xvda"
-  # #   ebs {
-  # #     volume_size = 30
-  # #     volume_type = "gp3"
-  # #     delete_on_termination = true
-  # #     encrypted             = false
-  # #     iops        = 3000
-  # #     throughput = 125
-  # #   }
-  # }
+  block_device_mappings {
+    device_name = "/dev/xvda"
+    ebs {
+      volume_size = 4
+      volume_type = "gp3"
+      delete_on_termination = true
+      encrypted             = false
+      iops        = 3000
+      throughput = 125
+    }
+  }
 
   instance_market_options {
     market_type = "spot"
@@ -129,12 +129,6 @@ resource "aws_launch_template" "jenkins" {
 
   iam_instance_profile {
     name = "jenkins_instance_profile"
-  }
-
-  lifecycle {
-    ignore_changes = [
-      image_id,  # Ignore changes to AMI ID to prevent recreation when new AMIs are available
-    ]
   }
 
   tag_specifications {
